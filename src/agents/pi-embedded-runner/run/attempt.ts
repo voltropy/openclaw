@@ -665,6 +665,25 @@ export async function runEmbeddedAttempt(
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
+
+        // Route through pluggable ContextEngine for context assembly.
+        // Legacy engine: pass-through (returns messages unchanged).
+        // LCM engine: builds context from its canonical store with budget-aware selection.
+        if (params.contextEngine) {
+          try {
+            const assembled = await params.contextEngine.assemble({
+              sessionId: params.sessionId,
+              messages: activeSession.messages,
+            });
+            if (assembled.messages !== activeSession.messages) {
+              activeSession.agent.replaceMessages(assembled.messages);
+            }
+          } catch (assembleErr) {
+            log.warn(
+              `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
+            );
+          }
+        }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
@@ -843,6 +862,7 @@ export async function runEmbeddedAttempt(
             }).sessionAgentId;
 
       let promptError: unknown = null;
+      const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1033,6 +1053,22 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+
+        // Ingest new messages into the context engine's canonical store.
+        // Legacy engine: no-op. LCM engine: persists to SQLite for future assembly/compaction.
+        if (params.contextEngine) {
+          const newMessages = messagesSnapshot.slice(prePromptMessageCount);
+          for (const msg of newMessages) {
+            try {
+              await params.contextEngine.ingest({
+                sessionId: sessionIdUsed,
+                message: msg,
+              });
+            } catch (ingestErr) {
+              log.warn(`context engine ingest failed: ${String(ingestErr)}`);
+            }
+          }
+        }
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction

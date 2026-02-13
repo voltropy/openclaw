@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { CompactEmbeddedPiSessionParams } from "./compact.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import {
+  ensureContextEnginesInitialized,
+  resolveContextEngine,
+} from "../../context-engine/index.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -46,11 +51,6 @@ import {
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import {
-  ensureContextEnginesInitialized,
-  resolveContextEngine,
-} from "../../context-engine/index.js";
-import type { CompactEmbeddedPiSessionParams } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
@@ -418,6 +418,10 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      // Resolve the context engine once and reuse across retries to avoid
+      // repeated DB connections for the LCM engine.
+      ensureContextEnginesInitialized();
+      const contextEngine = await resolveContextEngine(params.config);
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -447,6 +451,7 @@ export async function runEmbeddedPiAgent(
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
+            contextEngine,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
@@ -574,8 +579,6 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
-              ensureContextEnginesInitialized();
-              const contextEngine = await resolveContextEngine(params.config);
               const compactResult = await contextEngine.compact({
                 sessionId: params.sessionId,
                 sessionFile: params.sessionFile,
@@ -998,6 +1001,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        await contextEngine.dispose?.();
         process.chdir(prevCwd);
       }
     }),

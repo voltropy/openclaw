@@ -1,11 +1,28 @@
 import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
+import type { LcmContextEngine } from "../../plugins/lcm/engine.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+} from "../../config/sessions.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
 import { callGateway } from "../../gateway/call.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveLcmConfig } from "../../plugins/lcm/db/config.js";
+import {
+  createDelegatedExpansionGrant,
+  revokeDelegatedExpansionGrantForSession,
+} from "../../plugins/lcm/expansion-auth.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
@@ -59,6 +76,42 @@ function normalizeModelSelection(value: unknown): string | undefined {
     return primary.trim();
   }
   return undefined;
+}
+
+async function resolveRequesterConversationScopeId(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  requesterSessionKey: string;
+}): Promise<number | undefined> {
+  const requesterSessionKey = params.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return undefined;
+  }
+
+  try {
+    ensureContextEnginesInitialized();
+    const engine = await resolveContextEngine(params.cfg);
+    if (engine.info.id !== "lcm") {
+      return undefined;
+    }
+
+    const lcm = engine as LcmContextEngine;
+    const agentId = resolveAgentIdFromSessionKey(requesterSessionKey);
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const sessionEntry = store[requesterSessionKey];
+    const runtimeSessionId =
+      typeof sessionEntry?.sessionId === "string" ? sessionEntry.sessionId.trim() : "";
+    if (!runtimeSessionId) {
+      return undefined;
+    }
+
+    const conversation = await lcm
+      .getConversationStore()
+      .getConversationBySessionId(runtimeSessionId);
+    return conversation?.conversationId;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createSessionsSpawnTool(opts?: {
@@ -118,6 +171,10 @@ export function createSessionsSpawnTool(opts?: {
         key: requesterInternalKey,
         alias,
         mainKey,
+      });
+      const requesterConversationScopeId = await resolveRequesterConversationScopeId({
+        cfg,
+        requesterSessionKey: requesterInternalKey,
       });
 
       const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
@@ -266,6 +323,18 @@ export function createSessionsSpawnTool(opts?: {
         childDepth,
         maxSpawnDepth,
       });
+      let delegatedGrantId: string | undefined;
+      if (typeof requesterConversationScopeId === "number") {
+        const ttlMs =
+          runTimeoutSeconds > 0 ? Math.max(60_000, runTimeoutSeconds * 1000 + 60_000) : undefined;
+        delegatedGrantId = createDelegatedExpansionGrant({
+          delegatedSessionKey: childSessionKey,
+          issuerSessionId: requesterInternalKey,
+          allowedConversationIds: [requesterConversationScopeId],
+          tokenCap: resolveLcmConfig().maxExpandTokens,
+          ttlMs,
+        }).grantId;
+      }
 
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
@@ -298,6 +367,9 @@ export function createSessionsSpawnTool(opts?: {
           childRunId = response.runId;
         }
       } catch (err) {
+        if (delegatedGrantId) {
+          revokeDelegatedExpansionGrantForSession(childSessionKey, { removeBinding: true });
+        }
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
         return jsonResult({

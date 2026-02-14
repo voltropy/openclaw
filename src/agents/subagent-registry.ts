@@ -1,6 +1,11 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  removeDelegatedExpansionGrantForSession,
+  resetDelegatedExpansionGrantsForTests,
+  revokeDelegatedExpansionGrantForSession,
+} from "../plugins/lcm/expansion-auth.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
@@ -184,6 +189,7 @@ async function sweepSubagentRuns() {
       continue;
     }
     subagentRuns.delete(runId);
+    removeDelegatedExpansionGrantForSession(entry.childSessionKey);
     mutated = true;
     try {
       await callGateway({
@@ -263,11 +269,13 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     return;
   }
   if (cleanup === "delete") {
+    revokeDelegatedExpansionGrantForSession(entry.childSessionKey, { removeBinding: true });
     subagentRuns.delete(runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(runId);
     return;
   }
+  revokeDelegatedExpansionGrantForSession(entry.childSessionKey);
   entry.cleanupCompletedAt = Date.now();
   persistSubagentRuns();
   retryDeferredCompletedAnnounces(runId);
@@ -505,6 +513,10 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
+  for (const entry of subagentRuns.values()) {
+    removeDelegatedExpansionGrantForSession(entry.childSessionKey);
+  }
+  resetDelegatedExpansionGrantsForTests();
   subagentRuns.clear();
   resumedRuns.clear();
   resetAnnounceQueuesForTests();
@@ -525,6 +537,10 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export function releaseSubagentRun(runId: string) {
+  const entry = subagentRuns.get(runId);
+  if (entry) {
+    removeDelegatedExpansionGrantForSession(entry.childSessionKey);
+  }
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();

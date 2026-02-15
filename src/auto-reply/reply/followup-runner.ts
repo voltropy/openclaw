@@ -47,10 +47,11 @@ export function createFollowupRunner(params: {
     defaultModel,
     agentCfgContextTokens,
   } = params;
+  const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
-    isHeartbeat: opts?.isHeartbeat === true,
+    isHeartbeat,
   });
 
   /**
@@ -166,6 +167,7 @@ export function createFollowupRunner(params: {
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              isHeartbeat,
               execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,

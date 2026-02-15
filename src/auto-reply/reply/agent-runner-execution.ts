@@ -301,6 +301,7 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
             verboseLevel: params.followupRun.run.verboseLevel,
             reasoningLevel: params.followupRun.run.reasoningLevel,
+            isHeartbeat: params.isHeartbeat,
             execOverrides: params.followupRun.run.execOverrides,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(

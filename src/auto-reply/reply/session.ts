@@ -44,7 +44,6 @@ export type SessionInitResult = {
   sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
-  resetCommand?: "new" | "reset";
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -134,7 +133,6 @@ export async function initSessionState(params: {
   let systemSent = false;
   let abortedLastRun = false;
   let resetTriggered = false;
-  let resetCommand: "new" | "reset" | undefined;
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
@@ -182,12 +180,10 @@ export async function initSessionState(params: {
       break;
     }
     const triggerLower = trigger.toLowerCase();
-    const triggerResetCommand = triggerLower === "/reset" ? "reset" : "new";
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
-      resetCommand = triggerResetCommand;
       break;
     }
     const triggerPrefixLower = `${triggerLower} `;
@@ -198,7 +194,6 @@ export async function initSessionState(params: {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;
-      resetCommand = triggerResetCommand;
       break;
     }
   }
@@ -259,11 +254,6 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
-  const lcmCarryoverMode = isNewSession
-    ? resetCommand === "reset"
-      ? "deny"
-      : "allow"
-    : baseEntry?.lcmCarryoverMode;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
@@ -296,7 +286,6 @@ export async function initSessionState(params: {
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     sendPolicy: baseEntry?.sendPolicy,
-    lcmCarryoverMode,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
@@ -469,7 +458,6 @@ export async function initSessionState(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
     resetTriggered,
-    resetCommand,
     systemSent,
     abortedLastRun,
     storePath,

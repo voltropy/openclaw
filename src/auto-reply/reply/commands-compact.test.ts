@@ -9,6 +9,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: vi.fn(),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
+  resolveEmbeddedSessionLane: vi.fn().mockReturnValue("default"),
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
